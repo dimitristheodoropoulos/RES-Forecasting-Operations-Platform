@@ -1,5 +1,5 @@
-numpy
-pandas
+numpy>=2.0
+pandas>=2.2
 xarray
 scipy
 matplotlib
@@ -8,4 +8,9 @@ geopandas
 shapely
 pyyaml
 windrose
-pywake            # αν θες
+pywake
+influxdb-client
+paho-mqtt
+psycopg2-binary
+cdsapi
+netcdf4

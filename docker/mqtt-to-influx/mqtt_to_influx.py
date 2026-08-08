@@ -1,95 +1,305 @@
-# mqtt_to_influx.py
-
 import os
-import time
-import logging
 import json
-from influxdb_client import InfluxDBClient, Point, WriteOptions
+import logging
+from datetime import datetime, timezone
+
 import paho.mqtt.client as mqtt
-import pandas as pd
+from influxdb_client import InfluxDBClient, Point, WriteOptions
 
-# Ρυθμίσεις InfluxDB από env vars
-INFLUXDB_URL = os.getenv("INFLUXDB_URL", "http://influxdb:8086")
-INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "admintoken")
-INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "energy-org")
-INFLUXDB_BUCKET = os.getenv("INFLUXDB_BUCKET", "wind-data")
 
-# MQTT ρυθμίσεις
-MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-MQTT_TOPIC = os.getenv("MQTT_TOPIC", "wind/measurements")
+# =====================================
+# InfluxDB configuration
+# =====================================
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s: %(message)s')
+INFLUXDB_URL = os.getenv(
+    "INFLUXDB_URL",
+    "http://influxdb:8086"
+)
 
-client = None
+INFLUXDB_TOKEN = os.getenv(
+    "INFLUXDB_TOKEN",
+    "admintoken"
+)
+
+INFLUXDB_ORG = os.getenv(
+    "INFLUXDB_ORG",
+    "energy-org"
+)
+
+INFLUXDB_BUCKET = os.getenv(
+    "INFLUXDB_BUCKET",
+    "wind-data"
+)
+
+
+# =====================================
+# MQTT configuration
+# =====================================
+
+MQTT_BROKER = os.getenv(
+    "MQTT_BROKER",
+    "mosquitto"
+)
+
+MQTT_PORT = int(
+    os.getenv("MQTT_PORT", 1883)
+)
+
+MQTT_TOPIC = os.getenv(
+    "MQTT_TOPIC",
+    "wind/measurements"
+)
+
+
+# =====================================
+# Logging
+# =====================================
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s: %(message)s"
+)
+
+
 write_api = None
 
-def on_connect(client, userdata, flags, rc, properties=None):
+
+# =====================================
+# MQTT callbacks
+# =====================================
+
+def on_connect(client, userdata, flags, rc):
+
     if rc == 0:
-        logging.info(f"Συνδεθήκαμε στον MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}")
-        logging.info(f"Εγγραφή στο θέμα: {MQTT_TOPIC}")
+
+        logging.info(
+            f"Connected to MQTT broker {MQTT_BROKER}:{MQTT_PORT}"
+        )
+
         client.subscribe(MQTT_TOPIC)
+
+        logging.info(
+            f"Subscribed to topic {MQTT_TOPIC}"
+        )
+
     else:
-        logging.error(f"Αποτυχία σύνδεσης με κωδικό: {rc}")
+
+        logging.error(
+            f"MQTT connection failed. Code: {rc}"
+        )
+
+
+def parse_timestamp(value):
+
+    if value is None:
+
+        return datetime.now(timezone.utc)
+
+
+    if isinstance(value, (int, float)):
+
+        return datetime.fromtimestamp(
+            value,
+            tz=timezone.utc
+        )
+
+
+    try:
+
+        return datetime.fromisoformat(
+            value.replace("Z", "+00:00")
+        )
+
+    except Exception:
+
+        logging.warning(
+            "Invalid timestamp format. Using current UTC time."
+        )
+
+        return datetime.now(timezone.utc)
+
+
 
 def on_message(client, userdata, msg):
+
     try:
-        # Αποκωδικοποίηση του JSON payload
-        payload = json.loads(msg.payload.decode())
-        logging.info(f"Λήψη μηνύματος: {payload} από θέμα: {msg.topic}")
 
-        timestamp_value = payload.get("timestamp")
-        if timestamp_value is not None:
-            # ************** ΔΙΟΡΘΩΣΗ ΕΔΩ **************
-            # Remove unit='s' to allow pandas to automatically detect string format
-            # If the timestamp is an integer (epoch), pandas will still handle it.
-            point_timestamp = pd.to_datetime(timestamp_value, utc=True)
-            # **********************************************
-        else:
-            # Αν δεν υπάρχει timestamp στο payload, χρησιμοποιούμε την τρέχουσα ώρα UTC
-            point_timestamp = pd.to_datetime('now', utc=True)
-        
-        # Δημιουργία InfluxDB Point με τα νέα πεδία και το tag
-        point = (
-            Point("wind_speed")
-            .tag("turbine", payload["turbine"])
-            .field("speed", float(payload["speed"]))
-            .field("direction", int(payload["direction"]))
-            .field("power", float(payload["power"]))
-            .time(point_timestamp)
+        payload = json.loads(
+            msg.payload.decode("utf-8")
         )
-        
-        write_api.write(bucket=INFLUXDB_BUCKET, org=INFLUXDB_ORG, record=point)
-        logging.info(f"Επιτυχής εγγραφή στην InfluxDB για τουρμπίνα {payload['turbine']}")
 
-    except json.JSONDecodeError as e:
-        logging.error(f"Σφάλμα JSON decoding: {e} - Payload: {msg.payload.decode()}")
+
+        logging.info(
+            f"Received MQTT message: {payload}"
+        )
+
+
+        point_time = parse_timestamp(
+            payload.get("timestamp")
+        )
+
+
+        point = (
+
+            Point("wind_speed")
+
+            .tag(
+                "turbine",
+                payload.get(
+                    "turbine",
+                    "unknown"
+                )
+            )
+
+            .field(
+                "speed",
+                float(payload["speed"])
+            )
+
+            .field(
+                "direction",
+                int(payload["direction"])
+            )
+
+            .field(
+                "power",
+                float(payload["power"])
+            )
+
+            .time(point_time)
+
+        )
+
+
+        write_api.write(
+            bucket=INFLUXDB_BUCKET,
+            org=INFLUXDB_ORG,
+            record=point
+        )
+
+
+        logging.info(
+            "Data written successfully to InfluxDB"
+        )
+
+
+    except json.JSONDecodeError:
+
+        logging.error(
+            "Invalid JSON payload"
+        )
+
+
     except KeyError as e:
-        logging.error(f"Λείπει κλειδί στο JSON payload: {e} - Payload: {msg.payload.decode()}")
+
+        logging.error(
+            f"Missing field: {e}"
+        )
+
+
     except Exception as e:
-        logging.error(f"Γενικό σφάλμα στην επεξεργασία μηνύματος: {e} - Payload: {msg.payload.decode()}") # Added payload to error for more context
+
+        logging.exception(
+            f"Processing error: {e}"
+        )
+
+
+
+def on_disconnect(client, userdata, rc):
+
+    logging.warning(
+        f"MQTT disconnected. Code: {rc}"
+    )
+
+
+# =====================================
+# Main
+# =====================================
 
 def main():
-    global client, write_api
-    influx_client = InfluxDBClient(
-        url=INFLUXDB_URL,
-        token=INFLUXDB_TOKEN,
-        org=INFLUXDB_ORG
-    )
-    write_api = influx_client.write_api(write_options=WriteOptions(batch_size=1))
 
-    client = mqtt.Client(protocol=mqtt.MQTTv311)
-    client.on_connect = on_connect
-    client.on_message = on_message
-    client.on_disconnect = lambda client, userdata, rc: logging.warning(f"Αποσυνδέθηκε από broker με κωδικό: {rc}")
+    global write_api
+
+
+    influx_client = InfluxDBClient(
+
+        url=INFLUXDB_URL,
+
+        token=INFLUXDB_TOKEN,
+
+        org=INFLUXDB_ORG
+
+    )
+
+
+    write_api = influx_client.write_api(
+
+        write_options=WriteOptions(
+
+            batch_size=1
+
+        )
+
+    )
+
+
+    mqtt_client = mqtt.Client(
+
+        client_id="mqtt-to-influx",
+
+        protocol=mqtt.MQTTv311
+
+    )
+
+
+    mqtt_client.on_connect = on_connect
+
+    mqtt_client.on_message = on_message
+
+    mqtt_client.on_disconnect = on_disconnect
+
 
     try:
-        client.connect(MQTT_BROKER, MQTT_PORT, 60)
-    except Exception as e:
-        logging.error(f"Σφάλμα σύνδεσης με MQTT Broker: {e}")
-        return
 
-    client.loop_forever()
+        logging.info(
+            "Connecting to MQTT broker..."
+        )
+
+
+        mqtt_client.connect(
+
+            MQTT_BROKER,
+
+            MQTT_PORT,
+
+            60
+
+        )
+
+
+        mqtt_client.loop_forever()
+
+
+    except KeyboardInterrupt:
+
+        logging.info(
+            "Stopping service..."
+        )
+
+
+    except Exception as e:
+
+        logging.exception(
+            f"Fatal error: {e}"
+        )
+
+
+    finally:
+
+        influx_client.close()
+
+
 
 if __name__ == "__main__":
+
     main()

@@ -1,9 +1,8 @@
-version: "3.7"
-
 services:
   influxdb:
     image: influxdb:2.7
     container_name: influxdb
+    restart: unless-stopped
     ports:
       - "8086:8086"
     volumes:
@@ -18,9 +17,26 @@ services:
     networks:
       - data_processing_network
 
+  postgres:
+    image: postgres:16
+    container_name: postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=energy_user
+      - POSTGRES_PASSWORD=energy_pass
+      - POSTGRES_DB=energy_analytics
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - data_processing_network
+
   mosquitto:
     image: eclipse-mosquitto
     container_name: mosquitto
+    restart: unless-stopped
     ports:
       - "1883:1883"
       - "9001:9001"
@@ -32,6 +48,7 @@ services:
   grafana:
     image: grafana/grafana
     container_name: grafana
+    restart: unless-stopped
     ports:
       - "3000:3000"
     volumes:
@@ -46,6 +63,7 @@ services:
       context: ./mqtt-publisher
       dockerfile: Dockerfile
     container_name: mqtt_publisher
+    restart: unless-stopped
     depends_on:
       - mosquitto
     environment:
@@ -60,6 +78,7 @@ services:
       context: ../ # ΑΛΛΑΓΗ ΕΔΩ: Ορίζουμε το context στον ριζικό φάκελο του project (ένα επίπεδο πάνω)
       dockerfile: ./docker/mqtt-to-influx/Dockerfile # ΑΛΛΑΓΗ ΕΔΩ: Η διαδρομή του Dockerfile τώρα είναι σχετική με το νέο context
     container_name: mqtt_to_influx
+    restart: unless-stopped
     depends_on:
       - mosquitto
       - influxdb

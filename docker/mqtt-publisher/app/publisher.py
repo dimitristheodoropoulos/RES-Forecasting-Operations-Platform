@@ -39,51 +39,55 @@ except Exception as e:
 
 client.loop_start()
 
-# Αναγνωριστικό τουρμπίνας (σημαντικό για το Grafana)
-turbine_id = "t1" # Μπορείς να προσθέσεις και άλλες τουρμπίνες αν θες
+# Αναγνωριστικά τουρμπίνας/σταθμού αναφοράς
+turbine_id = "t1"
+reference_id = "T2_ref"
 
 # Παράμετροι για ένα απλό trend/cycle (24-ωρος κύκλος)
 start_time = time.time()
 cycle_duration = 3600 * 24 # Ένας κύκλος 24 ωρών σε δευτερόλεπτα
 
+def build_payload(station_id, base_speed, direction):
+    wind_speed = max(0, round(base_speed, 2))
+    power_output = round(0.5 * 1.2 * (wind_speed**3), 2) # kW
+    return {
+        "turbine": station_id,
+        "speed": wind_speed,
+        "direction": direction,
+        "power": power_output,
+        "timestamp": int(time.time()) # Timestamp σε epoch δευτερόλεπτα
+    }
+
 try:
     while True:
         current_time = time.time()
         elapsed_time = current_time - start_time
-        
+
         # Προσθήκη εποχιακής διακύμανσης (π.χ. ημέρας/νύχτας) στην ταχύτητα ανέμου
         daily_cycle_factor = math.sin((elapsed_time / cycle_duration) * 2 * math.pi)
 
-        # Βασική ταχύτητα ανέμου με προσθήκη κύκλου και τυχαίας διακύμανσης
-        # Η ταχύτητα θα κυμαίνεται περίπου 5 m/s (όταν daily_cycle_factor είναι -1) έως 11 m/s (όταν daily_cycle_factor είναι 1)
-        base_wind_speed = 8 + daily_cycle_factor * 3 + random.uniform(-2.0, 2.0) # m/s
-        
-        # Εξασφάλιση ότι η ταχύτητα δεν είναι αρνητική
-        wind_speed = max(0, round(base_wind_speed, 2))
+        # --- Κύρια τοποθεσία (t1) ---
+        # Η ταχύτητα θα κυμαίνεται περίπου 5 m/s έως 11 m/s
+        base_wind_speed_t1 = 8 + daily_cycle_factor * 3 + random.uniform(-2.0, 2.0)
+        wind_direction_t1 = random.randint(0, 359)
+        data_t1 = build_payload(turbine_id, base_wind_speed_t1, wind_direction_t1)
 
-        # Υπολογισμός ισχύος με βάση το απλό μοντέλο P=0.5ρv³ (όπου ρ=1.2 kg/m³)
-        power_output = round(0.5 * 1.2 * (wind_speed**3), 2) # kW
+        # --- Σταθμός αναφοράς (T2_ref) ---
+        # Ίδιος γενικός καιρικός κύκλος, μικρή συστηματική απόκλιση + ανεξάρτητος θόρυβος,
+        # όπως θα συνέβαινε με έναν πραγματικό κοντινό μετεωρολογικό σταθμό αναφοράς
+        base_wind_speed_ref = base_wind_speed_t1 * 0.95 + random.uniform(-0.5, 0.5) + 0.3
+        wind_direction_ref = (wind_direction_t1 + random.randint(-15, 15)) % 360
+        data_ref = build_payload(reference_id, base_wind_speed_ref, wind_direction_ref)
 
-        # Κατεύθυνση ανέμου (παραμένει τυχαία)
-        wind_direction = random.randint(0, 359) # Degrees
+        # Δημοσίευση και των δύο payloads
+        for data in (data_t1, data_ref):
+            result = client.publish(topic, json.dumps(data))
+            status = result[0]
+            if status == 0:
+                logging.info(f"Απεστάλη: {data} στο θέμα {topic}")
+            else:
+                logging.error(f"Αποτυχία αποστολής στο θέμα {topic}")
 
-        # Δημιουργία JSON payload
-        data = {
-            "turbine": turbine_id,
-            "speed": wind_speed,
-            "direction": wind_direction,
-            "power": power_output,
-            "timestamp": int(time.time()) # Timestamp σε epoch δευτερόλεπτα
-        }
-
-        # Δημοσίευση του JSON payload
-        result = client.publish(topic, json.dumps(data))
-        status = result[0]
-        if status == 0:
-            logging.info(f"Απεστάλη: {data} στο θέμα {topic}")
-        else:
-            logging.error(f"Αποτυχία αποστολής στο θέμα {topic}")
-        
         time.sleep(5) # Στέλνει δεδομένα κάθε 5 δευτερόλεπτα
 except KeyboardInterrupt:
     logging.info("Τερματισμός publisher από χρήστη")
